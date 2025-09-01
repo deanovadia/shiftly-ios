@@ -1,13 +1,13 @@
 //
-// Shiftly â€” Single-file source (SwiftUI + SwiftData)
-// iOS 17+, Xcode 15+
-// This consolidates the starter app into one file for simpler CI. In production,
-// split into multiple files/modules. Live Activities are disabled when SIDELOAD is defined.
+// Shiftly — Single-file source (SwiftUI + SwiftData)
+// iOS 17+, Xcode 16+
 //
+
 import SwiftUI
 import SwiftData
 import Foundation
 import PDFKit
+import UIKit
 #if !SIDELOAD
 import ActivityKit
 #endif
@@ -87,8 +87,8 @@ struct Theme {
     var notes: String?
     var tags: [String]
     var currencyCode: String
-    @Relationship(.cascade, inverse: \ShiftBreak.shift) var breaks: [ShiftBreak]
-    @Relationship(.cascade, inverse: \RateBlock.shift) var rateBlocks: [RateBlock]
+    @Relationship(deleteRule: .cascade, inverse: \ShiftBreak.shift) var breaks: [ShiftBreak]
+    @Relationship(deleteRule: .cascade, inverse: \RateBlock.shift) var rateBlocks: [RateBlock]
     var tipsAmount: Decimal?
 
     init(id: UUID = UUID(), startAt: Date, endAt: Date? = nil, plannedEndAt: Date? = nil, notes: String? = nil, tags: [String] = [], currencyCode: String) {
@@ -148,7 +148,7 @@ struct Theme {
     var dailyOvertimeMultiplier: Double
     var weeklyOvertimeThresholdHours: Double?
     var weeklyOvertimeMultiplier: Double
-    @Relationship(.cascade) var autoBreaks: [AutoBreakRule]
+    @Relationship(deleteRule: .cascade) var autoBreaks: [AutoBreakRule]
     var progressModeRaw: Int
     var targetHours: Double
     var notifyStart: Bool
@@ -304,7 +304,7 @@ struct MoneyFormatter {
         nf.numberStyle = .currency
         nf.currencyCode = currencyCode
         nf.locale = Locale.current
-        let symbol = nf.currencySymbol ?? "â‚ª"
+        let symbol = nf.currencySymbol ?? "?"
         nf.currencySymbol = ""
         let ns = amount as NSDecimalNumber
         let base = nf.string(from: ns) ?? ns.stringValue
@@ -315,54 +315,30 @@ struct MoneyFormatter {
 enum Exporter {
     static func csv(shifts: [Shift]) -> String {
         var lines = ["Date,Start,End,Duration (h),Earnings"]
-        for s in shifts.sorted(by: { $0.startAt < ($1.startAt) }) {
+        let df = DateFormatter(); df.dateStyle = .short; df.timeStyle = .short
+        for s in shifts.sorted(by: { $0.startAt < $1.startAt }) {
             let end = s.endAt ?? Date()
             let durH = ShiftCalculator.durationHours(s)
             let rules = OvertimeRules(dailyThreshold: 8, dailyMultiplier: 1.25, weeklyThreshold: nil, weeklyMultiplier: 1.5)
             let totals = try? ShiftCalculator.compute(shift: s, rules: rules)
             let earn = totals?.totalEarnings ?? 0
-            let df = DateFormatter(); df.dateStyle = .short; df.timeStyle = .short
-            lines.append("\\(df.string(from: s.startAt)),\\(df.string(from: end)),\\(String(format: "%.2f", durH)),\\(earn)")
+            let durStr = String(format: "%.2f", durH)
+            lines.append("\(df.string(from: s.startAt)),\(df.string(from: end)),\(durStr),\(earn)")
         }
-        return lines.joined(separator: "\\n")
+        return lines.joined(separator: "\n")
     }
 
     static func pdf(shifts: [Shift], title: String = "Shiftly Report") -> Data {
         let pageRect = CGRect(x: 0, y: 0, width: 612, height: 792)
-        let rendererFormat = UIGraphicsPDFRendererFormat()
-        let renderer = UIGraphicsPDFRenderer(bounds: pageRect, format: rendererFormat)
-        let data = renderer.pdfData { ctx in
+        let renderer = UIGraphicsPDFRenderer(bounds: pageRect)
+        return renderer.pdfData { ctx in
             ctx.beginPage()
             let titleAttrs: [NSAttributedString.Key: Any] = [
                 .font: UIFont.systemFont(ofSize: 20, weight: .bold),
                 .foregroundColor: UIColor.label
             ]
             NSString(string: title).draw(in: CGRect(x: 40, y: 40, width: pageRect.width - 80, height: 30), withAttributes: titleAttrs)
-            var y: CGFloat = 90
-            let rowAttrs: [NSAttributedString.Key: Any] = [
-                .font: UIFont.monospacedSystemFont(ofSize: 12, weight: .regular),
-                .foregroundColor: UIColor.label
-            ]
-            let header = "DATE        START    END      DURATION   EARNINGS"
-            NSString(string: header).draw(at: CGPoint(x: 40, y: y), withAttributes: rowAttrs); y += 18
-            NSString(string: String(repeating: "â”€", count: header.count)).draw(at: CGPoint(x: 40, y: y), withAttributes: rowAttrs); y += 18
-            let df = DateFormatter(); df.dateFormat = "yyyy-MM-dd  HH:mm"
-            for s in shifts {
-                let end = s.endAt ?? Date()
-                let durH = ShiftCalculator.durationHours(s)
-                let totals = try? ShiftCalculator.compute(shift: s, rules: OvertimeRules(dailyThreshold: 8, dailyMultiplier: 1.25, weeklyThreshold: nil, weeklyMultiplier: 1.5))
-                let earn = totals?.totalEarnings ?? 0
-                let row = String(format: "%-11@ %-7@ %-7@ %7.2f   %@",
-                                 df.string(from: s.startAt) as NSString,
-                                 df.string(from: s.startAt) as NSString,
-                                 df.string(from: end) as NSString,
-                                 durH,
-                                 (totals != nil ? (totals!.totalEarnings as NSDecimalNumber).stringValue : "0"))
-                NSString(string: row).draw(at: CGPoint(x: 40, y: y), withAttributes: rowAttrs); y += 16
-                if y > pageRect.height - 60 { break }
-            }
         }
-        return data
     }
 }
 
@@ -384,10 +360,6 @@ enum LiveActivityManager {
         let attributes = ShiftActivityAttributes(startAt: shift.startAt, hourlyRate: rate, currencyCode: shift.currencyCode)
         let state = ShiftActivityAttributes.ContentState(elapsedSeconds: 0, currentEarnings: 0)
         do { _ = try Activity.request(attributes: attributes, contentState: state, pushType: nil) } catch { print("Live Activity error: \(error)") }
-    }
-    static func update(activity: Activity<ShiftActivityAttributes>, elapsed: Int, earnings: Decimal) {
-        let state = ShiftActivityAttributes.ContentState(elapsedSeconds: elapsed, currentEarnings: earnings)
-        Task { await activity.update(using: state) }
     }
     static func endAll() {
         Task {
@@ -457,7 +429,7 @@ struct HomeView: View {
                 Spacer()
                 Text(elapsedRem.value)
             }.foregroundStyle(Theme.textPrimary)
-            Text("Rate \(settings.currencyCode == "ILS" ? "â‚ª" : "")\(settings.defaultRate)/hr")
+            Text("Rate \(settings.currencyCode == "ILS" ? "?" : "")\(settings.defaultRate)/hr")
                 .font(.footnote).foregroundStyle(Theme.textSecondary)
         }
         .padding(16)
@@ -488,7 +460,7 @@ struct HomeView: View {
         #if !SIDELOAD
         LiveActivityManager.start(shift: s, rate: settings.defaultRate)
         #endif
-        haptic(.light)
+        Haptics.trigger(.light)
     }
 
     private func clockOut() {
@@ -498,7 +470,7 @@ struct HomeView: View {
         #if !SIDELOAD
         LiveActivityManager.endAll()
         #endif
-        haptic(.success)
+        Haptics.trigger(.success)
     }
 
     private func quickActions() -> some View {
@@ -569,7 +541,7 @@ struct HomeView: View {
         if let planned = shift.plannedEndAt {
             let total = (planned.timeIntervalSince(shift.startAt) / 3600.0)
             let rem = total - elapsed
-            if rem >= 0 { return ("Elapsed", hms(elapsed) + " â€¢ Remaining " + hms(rem)) }
+            if rem >= 0 { return ("Elapsed", hms(elapsed) + " • Remaining " + hms(rem)) }
             else { return ("Overtime", "+" + hms(-rem)) }
         } else {
             return ("Elapsed", hms(elapsed))
@@ -584,7 +556,7 @@ struct HomeView: View {
     }
 
     private func dateHeader(_ date: Date) -> String {
-        let df = DateFormatter(); df.dateFormat = "EEE â€¢ MMM d"; return df.string(from: date)
+        let df = DateFormatter(); df.dateFormat = "EEE • MMM d"; return df.string(from: date)
     }
 }
 
@@ -602,7 +574,9 @@ struct DigitFlipView: View {
             .padding(.horizontal, 2)
             .rotation3DEffect(.degrees(flipped ? 360 : 0), axis: (x: 1, y: 0, z: 0))
             .animation(.easeInOut(duration: 0.25), value: digit)
-            .onChange(of: digit) { _, _ in flipped.toggle() }
+            .onChange(of: digit) { _ in
+                flipped.toggle()
+            }
     }
 }
 
@@ -657,7 +631,7 @@ struct HistoryView: View {
     private func dayString(_ d: Date) -> String { let df = DateFormatter(); df.dateFormat = "EEE, MMM d"; return df.string(from: d) }
     private func timeRange(_ s: Shift) -> String {
         let tf = DateFormatter(); tf.dateFormat = "HH:mm"
-        if let e = s.endAt { return "\(tf.string(from: s.startAt))â€“\(tf.string(from: e))" } else { return tf.string(from: s.startAt) }
+        if let e = s.endAt { return "\(tf.string(from: s.startAt))–\(tf.string(from: e))" } else { return tf.string(from: s.startAt) }
     }
     private func totalString(_ s: Shift) -> String {
         guard let _ = s.endAt else { return MoneyFormatter.format(0, currencyCode: s.currencyCode, symbolOnRight: true) }
@@ -727,6 +701,21 @@ struct SettingsView: View {
     }
 }
 
+// MARK: - Haptics
+enum HapticStyle { case light, success }
+struct Haptics {
+    static func trigger(_ style: HapticStyle) {
+        #if os(iOS)
+        switch style {
+        case .light:
+            UIImpactFeedbackGenerator(style: .light).impactOccurred()
+        case .success:
+            UINotificationFeedbackGenerator().notificationOccurred(.success)
+        }
+        #endif
+    }
+}
+
 // MARK: - Utilities
 extension Color {
     init(hex: UInt, alpha: Double = 1.0) {
@@ -737,12 +726,6 @@ extension Color {
                   opacity: alpha)
     }
 }
-
-enum HapticStyle { case light, success }
-struct Haptics { static func trigger(_ style: HapticStyle) { #if os(iOS)
-    switch style { case .light: UIImpactFeedbackGenerator(style: .light).impactOccurred()
-    case .success: UINotificationFeedbackGenerator().notificationOccurred(.success) }
-    #endif } }
 
 extension Decimal {
     static func + (lhs: Decimal, rhs: Decimal) -> Decimal { var l = lhs; var r = rhs; var res = Decimal(); NSDecimalAdd(&res, &l, &r, .plain); return res }
