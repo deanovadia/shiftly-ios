@@ -1,0 +1,22 @@
+# Xcode
+DerivedData/
+build/
+*.xcworkspace/xcshareddata/WorkspaceSettings.xcsettings
+*.xccheckout
+*.xcodeproj/project.xcworkspace/
+*.xcodeproj/xcuserdata/
+*.xcodeproj/project.xcworkspace/xcshareddata
+*.xcuserstate
+
+# Swift Package Manager
+.build/
+.packages/
+
+# macOS
+.DS_Store
+
+# Logs
+*.log
+
+# User-specific
+xcuserdata/
